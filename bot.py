@@ -183,7 +183,10 @@ async def play(interaction: discord.Interaction, query: str):
 
     player = _player_for(interaction)
     if player is None:
-        vc = await voice.channel.connect()
+        try:
+            vc = await voice.channel.connect()
+        except (asyncio.TimeoutError, discord.ClientException) as e:
+            return await interaction.followup.send(f"無法連上語音頻道：{e or '連線逾時'}")
         player = players[interaction.guild_id] = GuildPlayer(vc)
     elif player.vc.channel != voice.channel:
         return await interaction.followup.send("我已經在別的語音頻道了。")
