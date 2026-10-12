@@ -71,6 +71,8 @@ class GuildPlayer:
         self.vc = vc
         self.queue: deque[Track] = deque()
         self.current: Track | None = None
+        self.loop = "off"  # off / one / all
+        self._skipped = False
         self._wakeup = asyncio.Event()
         self._done = asyncio.Event()
         self._task = asyncio.create_task(self._run())
@@ -105,6 +107,14 @@ class GuildPlayer:
                     after=lambda _e: loop.call_soon_threadsafe(self._done.set),
                 )
                 await self._done.wait()
+
+                # 循環：單曲重播放回佇列最前面，整個佇列循環則放回最後面
+                # （手動 /skip 時單曲循環不重播）
+                if self.loop == "one" and not self._skipped:
+                    self.queue.appendleft(self.current)
+                elif self.loop == "all":
+                    self.queue.append(self.current)
+                self._skipped = False
         finally:
             await self.destroy()
 
@@ -191,8 +201,26 @@ async def skip(interaction: discord.Interaction):
     player = _player_for(interaction)
     if not player or not player.current:
         return await interaction.response.send_message("目前沒有在播放。", ephemeral=True)
+    player._skipped = True
     player.vc.stop()
     await interaction.response.send_message("已跳過。")
+
+
+LOOP_LABELS = {"off": "關閉", "one": "單曲循環", "all": "佇列循環"}
+
+
+@tree.command(name="loop", description="設定循環播放")
+@app_commands.describe(mode="關閉 / 單曲循環 / 佇列循環")
+@app_commands.choices(
+    mode=[app_commands.Choice(name=label, value=value) for value, label in LOOP_LABELS.items()]
+)
+@app_commands.guild_only()
+async def loop_cmd(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+    player = _player_for(interaction)
+    if not player:
+        return await interaction.response.send_message("目前沒有在播放。", ephemeral=True)
+    player.loop = mode.value
+    await interaction.response.send_message(f"循環模式：**{mode.name}**")
 
 
 @tree.command(name="pause", description="暫停")
@@ -221,7 +249,7 @@ async def queue(interaction: discord.Interaction):
     player = _player_for(interaction)
     if not player or not (player.current or player.queue):
         return await interaction.response.send_message("佇列是空的。", ephemeral=True)
-    lines = []
+    lines = [f"循環模式：{LOOP_LABELS[player.loop]}"]
     if player.current:
         lines.append(f"▶️ **{player.current.title}**")
     for i, t in enumerate(list(player.queue)[:10], 1):
